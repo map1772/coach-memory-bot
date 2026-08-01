@@ -1,0 +1,52 @@
+"""Точка входа. Webhook, потому что бесплатный Render считает живым только тот
+сервис, в который стучатся снаружи: long polling там засыпает через 15 минут.
+
+/health нужен не для красоты, а чтобы внешний пингер раз в 10 минут не давал
+сервису уснуть, иначе первое сообщение заказчика ждёт полминуты на разогреве.
+"""
+import logging
+import os
+
+from aiogram import Bot, Dispatcher
+from aiogram.client.default import DefaultBotProperties
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from aiohttp import web
+
+import db
+import handlers
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+TOKEN = os.environ["BOT_TOKEN"]
+BASE = os.getenv("WEBHOOK_BASE", "")          # https://имя.onrender.com
+PATH = "/tg/" + TOKEN.split(":")[0]
+PORT = int(os.getenv("PORT", "10000"))
+
+
+async def health(_: web.Request) -> web.Response:
+    return web.Response(text="ok")
+
+
+async def on_startup(bot: Bot) -> None:
+    await db.pool()
+    if BASE:
+        await bot.set_webhook(BASE.rstrip("/") + PATH, drop_pending_updates=True)
+        logging.info("webhook: %s", BASE.rstrip("/") + PATH)
+
+
+def main() -> None:
+    bot = Bot(TOKEN, default=DefaultBotProperties(parse_mode=None))
+    dp = Dispatcher()
+    dp.include_router(handlers.router)
+    dp.startup.register(on_startup)
+
+    app = web.Application()
+    app.router.add_get("/health", health)
+    app.router.add_get("/", health)
+    SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=PATH)
+    setup_application(app, dp, bot=bot)
+    web.run_app(app, host="0.0.0.0", port=PORT)
+
+
+if __name__ == "__main__":
+    main()

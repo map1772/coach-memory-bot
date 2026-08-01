@@ -1,0 +1,152 @@
+"""Команды и диалог.
+
+Анкета собирается через FSM, но сам профиль живёт в базе, а не в состоянии:
+состояние нужно только на время заполнения, а профиль переживает рестарты.
+"""
+import asyncio
+
+from aiogram import F, Router
+from aiogram.filters import Command, CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import KeyboardButton, Message, ReplyKeyboardMarkup, ReplyKeyboardRemove
+
+import db
+import llm
+import prompts
+
+router = Router()
+
+HELLO = ("Я тренер, который помнит, с кем говорит.\n\n"
+         "Сначала короткая анкета, шесть вопросов. После неё ответы будут опираться "
+         "на ваш профиль, а не на общие советы из интернета.\n\n"
+         "Потом пригодятся команды:\n"
+         "/profile что я о вас знаю\n"
+         "/why почему последний ответ был именно таким\n"
+         "/demo один вопрос от лица двух разных людей\n"
+         "/reset начать заново")
+
+QUESTIONS = [
+    ("name", "Как к вам обращаться?", None),
+    ("goal", "Какая цель? Например: похудеть, набрать массу, пробежать десятку, вернуть форму после перерыва.", None),
+    ("level", "Ваш уровень?", ["новичок", "средний", "опытный"]),
+    ("freq", "Сколько раз в неделю готовы тренироваться?", ["2", "3", "4", "5 и больше"]),
+    ("equipment", "Что есть из инвентаря? Если ничего, так и напишите.", ["зал", "гантели дома", "ничего"]),
+    ("limits", "Ограничения по здоровью, травмы, что нельзя? Если нет, напишите «нет».", ["нет"]),
+]
+
+
+class Form(StatesGroup):
+    step = State()
+
+
+def kb(options: list[str] | None) -> ReplyKeyboardMarkup | ReplyKeyboardRemove:
+    if not options:
+        return ReplyKeyboardRemove()
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=o)] for o in options],
+        resize_keyboard=True, one_time_keyboard=True)
+
+
+async def ask_step(msg: Message, state: FSMContext, i: int) -> None:
+    key, text, options = QUESTIONS[i]
+    await state.update_data(step=i)
+    await state.set_state(Form.step)
+    await msg.answer(f"{i + 1} из {len(QUESTIONS)}. {text}", reply_markup=kb(options))
+
+
+@router.message(CommandStart())
+async def start(msg: Message, state: FSMContext):
+    await state.clear()
+    await msg.answer(HELLO, reply_markup=ReplyKeyboardRemove())
+    await ask_step(msg, state, 0)
+
+
+@router.message(Command("reset"))
+async def reset(msg: Message, state: FSMContext):
+    await db.reset(msg.from_user.id)
+    await state.clear()
+    await msg.answer("Профиль стёрт, начинаем заново.")
+    await ask_step(msg, state, 0)
+
+
+@router.message(Command("profile"))
+async def profile(msg: Message):
+    prof = await db.get_profile(msg.from_user.id)
+    if not db.profile_filled(prof):
+        return await msg.answer("Анкета ещё не заполнена, наберите /start.")
+    body = prompts.render_profile(prof)
+    facts = prof.get("facts") or {}
+    tail = ("\n\nИз разговора я запомнил ещё вот что, этого в анкете не было:\n"
+            + "\n".join(f"- {k}: {v}" for k, v in facts.items())) if facts else ""
+    await msg.answer(f"Вот что я о вас знаю:\n{body}{tail}")
+
+
+@router.message(Command("why"))
+async def why(msg: Message):
+    prof = await db.get_profile(msg.from_user.id)
+    await msg.answer(prof.get("last_why") or "Пока не на что ссылаться, задайте вопрос.")
+
+
+@router.message(Command("demo"))
+async def demo(msg: Message):
+    """Один вопрос от лица двух разных профилей. Самый быстрый способ показать,
+    что ответ считается под человека, а не достаётся из шаблона."""
+    question = "Как мне тренироваться на этой неделе?"
+    a = {"name": "Аня", "goal": "похудеть", "level": "новичок", "freq": "2",
+         "equipment": "ничего", "limits": "болит колено при беге"}
+    b = {"name": "Игорь", "goal": "жим лёжа 120 кг", "level": "опытный", "freq": "5",
+         "equipment": "зал", "limits": "нет"}
+    await msg.answer("Задаю один и тот же вопрос от лица двух разных людей.\n"
+                     f"Вопрос: «{question}»")
+    for prof in (a, b):
+        await msg.bot.send_chat_action(msg.chat.id, "typing")
+        r = await llm.ask(prompts.system_prompt(prof), [], question)
+        who = f"{prof['name']}, {prof['level']}, цель {prof['goal']}, {prof['freq']} раза в неделю"
+        await msg.answer(f"**{who}**\n\n{r.text()}", parse_mode="Markdown")
+
+
+@router.message(Form.step)
+async def form_step(msg: Message, state: FSMContext):
+    data = await state.get_data()
+    i = data.get("step", 0)
+    key = QUESTIONS[i][0]
+    value = (msg.text or "").strip()
+    if not value:
+        return await msg.answer("Напишите ответ текстом.")
+    await db.save_profile(msg.from_user.id, **{key: value})
+    if i + 1 < len(QUESTIONS):
+        return await ask_step(msg, state, i + 1)
+    await state.clear()
+    await msg.answer("Готово, профиль собран. Спрашивайте что угодно про тренировки.\n"
+                     "Если захотите проверить, что я помню, наберите /profile.",
+                     reply_markup=ReplyKeyboardRemove())
+
+
+@router.message(F.text)
+async def talk(msg: Message):
+    tg_id = msg.from_user.id
+    prof = await db.get_profile(tg_id)
+    if not db.profile_filled(prof):
+        return await msg.answer("Сначала анкета, наберите /start, это минута.")
+
+    await msg.bot.send_chat_action(msg.chat.id, "typing")
+    hist = await db.history(tg_id)
+    reply = await llm.ask(prompts.system_prompt(prof), hist, msg.text)
+
+    await db.add_message(tg_id, "user", msg.text)
+    await db.add_message(tg_id, "bot", reply.text())
+    if reply.why:
+        used = ", ".join(reply.used_profile_fields)
+        await db.save_why(tg_id, reply.why + (f"\n\nОпирался на поля: {used}" if used else ""))
+    await msg.answer(reply.text())
+
+    # факты добываем после ответа, чтобы человек не ждал лишний вызов модели
+    asyncio.create_task(pull_facts(tg_id, msg.text, prof))
+
+
+async def pull_facts(tg_id: int, text: str, prof: dict) -> None:
+    known = ", ".join(f"{k}: {v}" for k, v in (prof.get("facts") or {}).items()) or "ничего"
+    facts = await llm.extract_facts(prompts.EXTRACT.format(text=text, known=known))
+    for f in facts[:5]:
+        await db.save_fact(tg_id, str(f["key"]), str(f["value"]))
