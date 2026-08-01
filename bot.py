@@ -6,6 +6,7 @@
 """
 import logging
 import os
+import secrets
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -20,6 +21,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 TOKEN = os.environ["BOT_TOKEN"]
 BASE = os.getenv("WEBHOOK_BASE", "")          # https://имя.onrender.com
 PATH = "/tg/" + TOKEN.split(":")[0]
+# ID бота публичен, поэтому путь секретом не является: без общего заголовка
+# на этот адрес мог бы стучаться кто угодно и затирать чужие профили
+SECRET = os.getenv("WEBHOOK_SECRET") or secrets.token_urlsafe(24)
 PORT = int(os.getenv("PORT", "10000"))
 
 
@@ -30,7 +34,8 @@ async def health(_: web.Request) -> web.Response:
 async def on_startup(bot: Bot) -> None:
     await db.pool()
     if BASE:
-        await bot.set_webhook(BASE.rstrip("/") + PATH, drop_pending_updates=True)
+        await bot.set_webhook(BASE.rstrip("/") + PATH, drop_pending_updates=True,
+                              secret_token=SECRET)
         logging.info("webhook: %s", BASE.rstrip("/") + PATH)
 
 
@@ -43,7 +48,7 @@ def main() -> None:
     app = web.Application()
     app.router.add_get("/health", health)
     app.router.add_get("/", health)
-    SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=PATH)
+    SimpleRequestHandler(dispatcher=dp, bot=bot, secret_token=SECRET).register(app, path=PATH)
     setup_application(app, dp, bot=bot)
     web.run_app(app, host="0.0.0.0", port=PORT)
 

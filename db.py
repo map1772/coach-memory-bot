@@ -4,6 +4,7 @@
 редко и целиком, история пишется на каждое сообщение и читается окном, факты
 приходят по одному и должны перезаписываться по ключу.
 """
+import asyncio
 import os
 
 import asyncpg
@@ -40,9 +41,21 @@ CREATE TABLE IF NOT EXISTS facts (
 
 PROFILE_FIELDS = ("name", "goal", "level", "age", "limits", "equipment", "freq")
 _pool: asyncpg.Pool | None = None
+_pool_lock = asyncio.Lock()
 
 
 async def pool() -> asyncpg.Pool:
+    """Лок нужен не сегодня, а завтра: сейчас пул греется на старте до приёма
+    трафика, но первый же вызов из другого места открыл бы гонку на два пула."""
+    global _pool
+    if _pool is None:
+        async with _pool_lock:
+            if _pool is None:
+                return await _create()
+    return _pool
+
+
+async def _create() -> asyncpg.Pool:
     global _pool
     if _pool is None:
         _pool = await asyncpg.create_pool(os.environ["DATABASE_URL"], min_size=1, max_size=4)
@@ -64,6 +77,8 @@ async def get_profile(tg_id: int) -> dict:
 async def save_profile(tg_id: int, **fields) -> None:
     """Профиль пишется целиком после анкеты и точечно при правках."""
     fields = {k: v for k, v in fields.items() if k in PROFILE_FIELDS}
+    if not fields:
+        return                      # иначе соберётся INSERT с пустым списком колонок
     cols = ", ".join(fields)
     ph = ", ".join(f"${i + 2}" for i in range(len(fields)))
     upd = ", ".join(f"{k} = EXCLUDED.{k}" for k in fields)
@@ -113,7 +128,7 @@ async def save_why(tg_id: int, why: str) -> None:
 
 async def reset(tg_id: int) -> None:
     p = await pool()
-    async with p.acquire() as c:
+    async with p.acquire() as c, c.transaction():
         await c.execute("DELETE FROM facts WHERE tg_id = $1", tg_id)
         await c.execute("DELETE FROM messages WHERE tg_id = $1", tg_id)
         await c.execute("DELETE FROM users WHERE tg_id = $1", tg_id)

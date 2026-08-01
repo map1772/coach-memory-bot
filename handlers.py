@@ -4,6 +4,8 @@
 состояние нужно только на время заполнения, а профиль переживает рестарты.
 """
 import asyncio
+import logging
+from collections import defaultdict
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
@@ -17,6 +19,10 @@ import prompts
 
 router = Router()
 _background: set[asyncio.Task] = set()
+# по одному замку на собеседника: два быстрых сообщения подряд иначе читают
+# историю до того, как первое в неё попало, и контекст рассыпается молча
+_locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+LIMIT = 4000                      # у Telegram потолок 4096 на сообщение
 
 HELLO = ("Я тренер, который помнит, с кем говорит.\n\n"
          "Сначала короткая анкета, шесть вопросов. После неё ответы будут опираться "
@@ -128,6 +134,9 @@ async def form_step(msg: Message, state: FSMContext):
     value = (msg.text or "").strip()
     if not value:
         return await msg.answer("Напишите ответ текстом.")
+    options = QUESTIONS[i][2]
+    if options and value not in options:
+        return await msg.answer("Выберите один из вариантов кнопкой: " + ", ".join(options))
     await db.save_profile(msg.from_user.id, **{key: value})
     if i + 1 < len(QUESTIONS):
         return await ask_step(msg, state, i + 1)
@@ -140,20 +149,23 @@ async def form_step(msg: Message, state: FSMContext):
 @router.message(F.text)
 async def talk(msg: Message):
     tg_id = msg.from_user.id
-    prof = await db.get_profile(tg_id)
-    if not db.profile_filled(prof):
-        return await msg.answer("Сначала анкета, наберите /start, это минута.")
+    # замок на собеседника: два быстрых сообщения подряд иначе прочитают историю
+    # раньше, чем первое в неё попадёт, и контекст рассыплется молча
+    async with _locks[tg_id]:
+        prof = await db.get_profile(tg_id)
+        if not db.profile_filled(prof):
+            return await msg.answer("Сначала анкета, наберите /start, это минута.")
 
-    await msg.bot.send_chat_action(msg.chat.id, "typing")
-    hist = await db.history(tg_id)
-    reply = await llm.ask(prompts.system_prompt(prof), hist, msg.text)
+        await msg.bot.send_chat_action(msg.chat.id, "typing")
+        hist = await db.history(tg_id)
+        reply = await llm.ask(prompts.system_prompt(prof), hist, msg.text)
 
-    await db.add_message(tg_id, "user", msg.text)
-    await db.add_message(tg_id, "bot", reply.text())
-    if reply.why:
-        used = ", ".join(reply.used_profile_fields)
-        await db.save_why(tg_id, reply.why + (f"\n\nОпирался на поля: {used}" if used else ""))
-    await msg.answer(reply.text())
+        await db.add_message(tg_id, "user", msg.text)
+        await db.add_message(tg_id, "bot", reply.text())
+        if reply.why:
+            used = ", ".join(reply.used_profile_fields)
+            await db.save_why(tg_id, reply.why + (f"\n\nОпирался на поля: {used}" if used else ""))
+        await msg.answer(reply.text()[:LIMIT])
 
     # факты добываем после ответа, чтобы человек не ждал лишний вызов модели
     # ссылку держим, иначе сборщик мусора может забрать задачу на полпути
@@ -172,3 +184,20 @@ async def pull_facts(tg_id: int, text: str, prof: dict, bot=None, chat_id=None) 
     # молчаливая запись в базу собеседнику не видна, а именно её и просят показать
     if saved and bot and chat_id:
         await bot.send_message(chat_id, "Запомнил: " + "; ".join(saved))
+
+
+@router.message()
+async def other(msg: Message):
+    """Фото, голосовое и стикеры иначе не ловит ни один хендлер, и бот молчит,
+    а человек решает, что он сломался."""
+    await msg.answer("Понимаю только текст. Напишите вопрос словами.")
+
+
+@router.errors()
+async def on_error(event) -> bool:
+    """Без этого любая непойманная ошибка выглядит для человека как молчание бота."""
+    logging.exception("ошибка обработки: %s", event.exception)
+    upd = getattr(event, "update", None)
+    if upd is not None and getattr(upd, "message", None):
+        await upd.message.answer("Что-то пошло не так на моей стороне, повторите вопрос.")
+    return True

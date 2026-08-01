@@ -45,10 +45,12 @@ def _extract_json(raw: str) -> dict:
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
-        m = re.search(r"\{.*\}", raw, re.S)
-        if not m:
+        # жадный поиск от первой скобки до последней ломается, когда после JSON
+        # идёт приписка со своими скобками: берём ровно один объект
+        i = raw.find("{")
+        if i < 0:
             raise
-        return json.loads(m.group(0))
+        return json.JSONDecoder().raw_decode(raw[i:])[0]
 
 
 async def raw_call(messages: list[dict], temperature: float = 0.7, max_tokens: int = 900) -> str:
@@ -63,7 +65,7 @@ async def raw_call(messages: list[dict], temperature: float = 0.7, max_tokens: i
         return r.json()["choices"][0]["message"]["content"]
 
 
-async def ask(system: str, history: list[dict], user_text: str, tries: int = 2) -> Reply:
+async def ask(system: str, history: list[dict], user_text: str, tries: int = 3) -> Reply:
     """Ответ собеседнику. Роли разделены: системные правила отдельно от текста
     пользователя, иначе инъекция в реплике читается моделью как инструкция."""
     messages = [{"role": "system", "content": system}]
@@ -72,12 +74,16 @@ async def ask(system: str, history: list[dict], user_text: str, tries: int = 2) 
                          "content": h["text"]})
     messages.append({"role": "user", "content": user_text})
 
-    last = None
+    last, raw = None, ""
     for n in range(tries):
         try:
-            return Reply(**_extract_json(await raw_call(messages)))
+            raw = await raw_call(messages)
+            return Reply(**_extract_json(raw))
         except (ValidationError, json.JSONDecodeError, KeyError) as e:
             last = e
+            # без собственного ответа модели в истории она не видит, что исправляет,
+            # да и два user-сообщения подряд часть провайдеров не любит
+            messages.append({"role": "assistant", "content": (raw or "")[:1500]})
             messages.append({"role": "user",
                              "content": "Верни строго один JSON-объект по описанной схеме, без текста вокруг."})
         except httpx.HTTPError as e:
