@@ -80,6 +80,25 @@ def test_facts_survive_bad_json():
         llm.raw_call = orig
 
 
+def test_few_shot_covers_all_branches():
+    """Без примера модель либо спрашивает через раз, либо не спрашивает никогда,
+    а отвлечённый вопрос заказчик поставил условием сделки."""
+    p = prompts.system_prompt({"level": "новичок", "goal": "похудеть"})
+    assert "данных не хватает" in p, "нет примера с уточняющим вопросом"
+    assert "не по теме" in p or "отвлечённого" in p, "нет примера отвлечённого вопроса"
+    assert "на языке последнего сообщения" in p, "нет правила про язык ответа"
+    assert "не врач" in p, "нет дисклеймера про здоровье"
+
+
+def test_facts_win_over_form():
+    """Анкета говорит «инвентаря нет», а в разговоре человек сказал, что купил гантели.
+    В промпте должно быть видно, чему верить, иначе модель решает наугад."""
+    prof = {"equipment": "ничего", "facts": {"инвентарь": "купил гантели"}}
+    out = prompts.render_profile(prof)
+    assert "верить этому" in out
+    assert out.index("ничего") < out.index("купил гантели"), "факты должны идти после анкеты"
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

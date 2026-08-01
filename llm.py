@@ -54,7 +54,9 @@ def _extract_json(raw: str) -> dict:
 async def raw_call(messages: list[dict], temperature: float = 0.7, max_tokens: int = 900) -> str:
     headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
     payload = {"model": MODEL, "messages": messages,
-               "temperature": temperature, "max_tokens": max_tokens}
+               "temperature": temperature, "max_tokens": max_tokens,
+               # просим сам формат у провайдера: дешевле, чем ловить кривой JSON ретраями
+               "response_format": {"type": "json_object"}}
     async with httpx.AsyncClient(timeout=TIMEOUT) as cl:
         r = await cl.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload)
         r.raise_for_status()

@@ -16,6 +16,7 @@ import llm
 import prompts
 
 router = Router()
+_background: set[asyncio.Task] = set()
 
 HELLO = ("Я тренер, который помнит, с кем говорит.\n\n"
          "Сначала короткая анкета, шесть вопросов. После неё ответы будут опираться "
@@ -24,7 +25,9 @@ HELLO = ("Я тренер, который помнит, с кем говорит
          "/profile что я о вас знаю\n"
          "/why почему последний ответ был именно таким\n"
          "/demo один вопрос от лица двух разных людей\n"
-         "/reset начать заново")
+         "/reset начать заново\n\n"
+         "Я не врач: подбираю нагрузку, но не ставлю диагнозов. "
+         "Если что-то болит, сначала к специалисту.")
 
 QUESTIONS = [
     ("name", "Как к вам обращаться?", None),
@@ -103,7 +106,18 @@ async def demo(msg: Message):
         await msg.bot.send_chat_action(msg.chat.id, "typing")
         r = await llm.ask(prompts.system_prompt(prof), [], question)
         who = f"{prof['name']}, {prof['level']}, цель {prof['goal']}, {prof['freq']} раза в неделю"
-        await msg.answer(f"**{who}**\n\n{r.text()}", parse_mode="Markdown")
+        # без parse_mode: ответ модели может содержать звёздочки и подчёркивания,
+        # и Telegram отвергнет всё сообщение из-за незакрытой разметки
+        await msg.answer(f"{who}\n\n{r.text()}")
+
+    # заказчик поставил отвлечённые вопросы жёстким условием, поэтому показываем
+    # это сами, а не надеемся, что он догадается проверить
+    off_topic = "Что посмотреть вечером?"
+    await msg.answer("Теперь вопрос вообще не по теме, чтобы было видно, что бот на нём "
+                     f"не ломается.\nВопрос: «{off_topic}»")
+    await msg.bot.send_chat_action(msg.chat.id, "typing")
+    r = await llm.ask(prompts.system_prompt(a), [], off_topic)
+    await msg.answer(r.text())
 
 
 @router.message(Form.step)
@@ -142,11 +156,19 @@ async def talk(msg: Message):
     await msg.answer(reply.text())
 
     # факты добываем после ответа, чтобы человек не ждал лишний вызов модели
-    asyncio.create_task(pull_facts(tg_id, msg.text, prof))
+    # ссылку держим, иначе сборщик мусора может забрать задачу на полпути
+    task = asyncio.create_task(pull_facts(tg_id, msg.text, prof, msg.bot, msg.chat.id))
+    _background.add(task)
+    task.add_done_callback(_background.discard)
 
 
-async def pull_facts(tg_id: int, text: str, prof: dict) -> None:
+async def pull_facts(tg_id: int, text: str, prof: dict, bot=None, chat_id=None) -> None:
     known = ", ".join(f"{k}: {v}" for k, v in (prof.get("facts") or {}).items()) or "ничего"
     facts = await llm.extract_facts(prompts.EXTRACT.format(text=text, known=known))
+    saved = []
     for f in facts[:5]:
         await db.save_fact(tg_id, str(f["key"]), str(f["value"]))
+        saved.append(f"{f['key']}: {f['value']}")
+    # молчаливая запись в базу собеседнику не видна, а именно её и просят показать
+    if saved and bot and chat_id:
+        await bot.send_message(chat_id, "Запомнил: " + "; ".join(saved))
