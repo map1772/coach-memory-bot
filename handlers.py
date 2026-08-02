@@ -43,6 +43,11 @@ QUESTIONS = [
     ("equipment", "Что есть из инвентаря? Если ничего, так и напишите.", ["зал", "гантели дома", "ничего"]),
     ("limits", "Ограничения по здоровью, травмы, что нельзя? Если нет, напишите «нет».", ["нет"]),
 ]
+# Кнопки у остальных вопросов это подсказка, а не список допустимого: инвентарь и
+# травмы кнопками не перечислишь, а вопрос прямо приглашает написать своё. Закрытый
+# набор нужен только там, где по значению дальше ветвится промпт.
+STRICT = {"level", "freq"}
+ANSWER_LIMIT = 200                # ответ анкеты уходит потом в каждый промпт
 
 
 class Form(StatesGroup):
@@ -135,8 +140,9 @@ async def form_step(msg: Message, state: FSMContext):
     if not value:
         return await msg.answer("Напишите ответ текстом.")
     options = QUESTIONS[i][2]
-    if options and value not in options:
+    if key in STRICT and value not in options:
         return await msg.answer("Выберите один из вариантов кнопкой: " + ", ".join(options))
+    value = value[:ANSWER_LIMIT]
     await db.save_profile(msg.from_user.id, **{key: value})
     if i + 1 < len(QUESTIONS):
         return await ask_step(msg, state, i + 1)

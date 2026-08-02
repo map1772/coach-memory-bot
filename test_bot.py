@@ -99,6 +99,16 @@ def test_facts_win_over_form():
     assert out.index("ничего") < out.index("купил гантели"), "факты должны идти после анкеты"
 
 
+def test_open_questions_accept_free_text():
+    """Про травмы и инвентарь бот сам просит написать своё, значит закрывать их
+    списком кнопок нельзя: реальное ограничение кнопкой не выберешь."""
+    import handlers
+    for key, text, _ in handlers.QUESTIONS:
+        if "напиш" in text.lower():
+            assert key not in handlers.STRICT, f"{key}: вопрос зовёт текст, а ответ закрыт кнопками"
+    assert handlers.STRICT == {"level", "freq"}, handlers.STRICT
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
