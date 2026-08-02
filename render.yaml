@@ -1,3 +1,9 @@
+databases:
+  - name: coach-memory-db
+    databaseName: coach
+    user: coach
+    plan: free
+
 services:
   - type: web
     name: coach-memory-bot
@@ -9,13 +15,16 @@ services:
     envVars:
       - key: BOT_TOKEN
         sync: false
-      - key: DATABASE_URL
-        sync: false
       - key: LLM_API_KEY
         sync: false
       - key: LLM_BASE_URL
         sync: false
       - key: LLM_MODEL
         sync: false
-      - key: WEBHOOK_BASE
-        sync: false
+      # строку подключения Render подставляет сам, копировать её руками незачем
+      - key: DATABASE_URL
+        fromDatabase:
+          name: coach-memory-db
+          property: connectionString
+      # WEBHOOK_BASE не объявляем: bot.py берёт адрес из RENDER_EXTERNAL_URL,
+      # платформа выставляет его сама, и имя сервиса может разъехаться с этим файлом

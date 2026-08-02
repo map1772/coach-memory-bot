@@ -19,7 +19,9 @@ import handlers
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 TOKEN = os.environ["BOT_TOKEN"]
-BASE = os.getenv("WEBHOOK_BASE", "")          # https://имя.onrender.com
+# адрес сервиса Render кладёт сам, руками его вбивать незачем: имя может разъехаться
+# с тем, что в render.yaml, если оно уже занято, и вебхук тогда уйдёт в никуда
+BASE = os.getenv("WEBHOOK_BASE") or os.getenv("RENDER_EXTERNAL_URL", "")
 PATH = "/tg/" + TOKEN.split(":")[0]
 # ID бота публичен, поэтому путь секретом не является: без общего заголовка
 # на этот адрес мог бы стучаться кто угодно и затирать чужие профили
