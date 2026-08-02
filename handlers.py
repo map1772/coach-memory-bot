@@ -89,7 +89,9 @@ async def profile(msg: Message):
     prof = await db.get_profile(msg.from_user.id)
     if not db.profile_filled(prof):
         return await msg.answer("Анкета ещё не заполнена, наберите /start.")
-    body = prompts.render_profile(prof)
+    # намеренно не render_profile: там строка «при расхождении верить этому»,
+    # написанная для модели, и факты, которые мы печатаем ниже своими словами
+    body = "\n".join(prompts.form_lines(prof))
     facts = prof.get("facts") or {}
     tail = ("\n\nИз разговора я запомнил ещё вот что, этого в анкете не было:\n"
             + "\n".join(f"- {k}: {v}" for k, v in facts.items())) if facts else ""

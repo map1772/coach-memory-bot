@@ -83,12 +83,21 @@ EXTRACT = """Из реплики пользователя вытащи новы�
 Если нового нет, верни {{"facts": []}}. Не повторяй то, что уже известно."""
 
 
-def render_profile(prof: dict) -> str:
-    """Профиль для промпта. Пустые поля не печатаем: модель начинает их выдумывать."""
+def form_lines(prof: dict) -> list[str]:
+    """Только анкета. Пустые поля не печатаем: модель начинает их выдумывать."""
     names = {"name": "имя", "goal": "цель", "level": "уровень", "age": "возраст",
              "limits": "ограничения по здоровью", "equipment": "инвентарь",
              "freq": "частота тренировок"}
-    lines = [f"- {label}: {prof[key]}" for key, label in names.items() if prof.get(key)]
+    return [f"- {label}: {prof[key]}" for key, label in names.items() if prof.get(key)]
+
+
+def render_profile(prof: dict) -> str:
+    """Профиль для промпта: анкета плюс факты с пометкой, чему верить при расхождении.
+
+    Человеку это показывать нельзя: строка про расхождение написана для модели.
+    Команда /profile собирает свой текст из form_lines.
+    """
+    lines = form_lines(prof)
     facts = prof.get("facts") or {}
     if facts:
         lines.append("Сказано в разговоре позже анкеты, при расхождении верить этому:")

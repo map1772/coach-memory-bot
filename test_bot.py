@@ -12,7 +12,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 import llm
 import prompts
-from db import profile_filled
+from db import merge_facts, profile_filled
 
 
 def test_json_extraction():
@@ -97,6 +97,37 @@ def test_facts_win_over_form():
     out = prompts.render_profile(prof)
     assert "верить этому" in out
     assert out.index("ничего") < out.index("купил гантели"), "факты должны идти после анкеты"
+
+
+def test_two_facts_one_key_survive():
+    """Человек в одной реплике назвал травму и что ему можно. Раньше ключ был один
+    на оба, и до профиля доезжало только последнее сказанное."""
+    rows = [{"key": "ограничение", "value": "больно наклоняться"},
+            {"key": "ограничение", "value": "приседания нормально"},
+            {"key": "ограничение", "value": "приседания нормально"}]
+    out = merge_facts(rows)
+    assert out == {"ограничение": "больно наклоняться; приседания нормально"}, out
+
+
+def test_profile_command_hides_model_instruction():
+    """Строка «при расхождении верить этому» написана для модели. Если /profile
+    печатает её человеку, заказчик видит наши внутренности, да ещё и дважды."""
+    import handlers  # noqa: F401  проверяем, что команда не зовёт render_profile
+    prof = {"name": "Марк", "goal": "форма", "facts": {"ограничение": "поясница"}}
+    user = "\n".join(prompts.form_lines(prof))
+    assert "верить этому" not in user and "поясница" not in user
+    assert "верить этому" in prompts.render_profile(prof), "модель без пометки решает наугад"
+
+
+def test_markdown_stripped():
+    """Сообщения уходят без parse_mode, поэтому звёздочки модели человек видит
+    как есть. Заказчику это читается как неряшливость, а не как жирный шрифт."""
+    r = llm.Reply(has_enough_context=True,
+                  answer="**Тренировка 1:** разминка\n*   Приседания\n### Итог\nвсё")
+    out = r.text()
+    assert "**" not in out and "###" not in out, out
+    assert "Тренировка 1:" in out and "Приседания" in out
+    assert out.count("— Приседания") == 1, out
 
 
 def test_open_questions_accept_free_text():

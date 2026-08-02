@@ -34,9 +34,14 @@ CREATE TABLE IF NOT EXISTS facts (
     tg_id      BIGINT NOT NULL,
     key        TEXT NOT NULL,
     value      TEXT NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT now(),
-    PRIMARY KEY (tg_id, key)
+    created_at TIMESTAMPTZ DEFAULT now()
 );
+-- Ключ был (tg_id, key), и два ограничения по здоровью подряд затирали друг друга:
+-- человек называл травму и что ему можно, а до профиля доезжало только последнее.
+-- Ограничений и предпочтений по определению бывает несколько, поэтому уникальна
+-- теперь пара ключ-значение, а расхождения разруливает правило свежести в промпте.
+ALTER TABLE facts DROP CONSTRAINT IF EXISTS facts_pkey;
+CREATE UNIQUE INDEX IF NOT EXISTS facts_uniq ON facts (tg_id, key, value);
 """
 
 PROFILE_FIELDS = ("name", "goal", "level", "age", "limits", "equipment", "freq")
@@ -70,8 +75,20 @@ async def get_profile(tg_id: int) -> dict:
         row = await c.fetchrow("SELECT * FROM users WHERE tg_id = $1", tg_id)
         facts = await c.fetch("SELECT key, value FROM facts WHERE tg_id = $1 ORDER BY created_at", tg_id)
     prof = dict(row) if row else {}
-    prof["facts"] = {f["key"]: f["value"] for f in facts}
+    prof["facts"] = merge_facts(facts)
     return prof
+
+
+def merge_facts(rows) -> dict[str, str]:
+    """У одного ключа бывает несколько значений: ограничений и предпочтений по
+    определению несколько. Склеиваем в порядке появления, свежее оказывается
+    справа, и правило свежести в промпте продолжает работать."""
+    merged: dict[str, list[str]] = {}
+    for r in rows:
+        vals = merged.setdefault(r["key"], [])
+        if r["value"] not in vals:
+            vals.append(r["value"])
+    return {k: "; ".join(v) for k, v in merged.items()}
 
 
 async def save_profile(tg_id: int, **fields) -> None:
@@ -116,7 +133,7 @@ async def save_fact(tg_id: int, key: str, value: str) -> None:
     async with p.acquire() as c:
         await c.execute(
             "INSERT INTO facts (tg_id, key, value) VALUES ($1, $2, $3) "
-            "ON CONFLICT (tg_id, key) DO UPDATE SET value = EXCLUDED.value, created_at = now()",
+            "ON CONFLICT (tg_id, key, value) DO UPDATE SET created_at = now()",
             tg_id, key[:60], value[:300])
 
 

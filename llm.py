@@ -20,6 +20,21 @@ API_KEY = os.getenv("LLM_API_KEY", "")
 TIMEOUT = float(os.getenv("LLM_TIMEOUT", "45"))
 
 
+def _plain(s: str) -> str:
+    """Снимает разметку модели.
+
+    Сообщения уходят без parse_mode намеренно: оборванная разметка заставляет
+    Telegram отвергнуть весь текст. Но тогда звёздочки видны человеку как есть,
+    и ответ выглядит неряшливо. Просить модель «не используй markdown» ненадёжно,
+    поэтому убираем сами: жирный и курсив снимаем, маркеры списка приводим к тире.
+    """
+    s = re.sub(r"\*\*(.+?)\*\*", r"\1", s, flags=re.S)      # **жирный**
+    s = re.sub(r"(?<!\w)__(.+?)__(?!\w)", r"\1", s, flags=re.S)
+    s = re.sub(r"^\s*[*+]\s+", "— ", s, flags=re.M)         # маркер списка
+    s = re.sub(r"^#{1,6}\s*", "", s, flags=re.M)            # заголовки
+    return s.strip()
+
+
 class Reply(BaseModel):
     has_enough_context: bool
     clarifying_question: str | None = None
@@ -30,8 +45,8 @@ class Reply(BaseModel):
     def text(self) -> str:
         """То, что реально уйдёт человеку."""
         if self.has_enough_context and self.answer:
-            return self.answer.strip()
-        return (self.clarifying_question or "").strip() or "Уточните, пожалуйста, что именно нужно."
+            return _plain(self.answer)
+        return _plain(self.clarifying_question or "") or "Уточните, пожалуйста, что именно нужно."
 
 
 class Facts(BaseModel):
