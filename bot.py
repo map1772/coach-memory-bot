@@ -33,12 +33,21 @@ async def health(_: web.Request) -> web.Response:
     return web.Response(text="ok")
 
 
+# Бесплатный Render усыпляет сервис, и будит его входящий запрос от самого Telegram.
+# Пока стоял сброс на каждом старте, то самое сообщение, которым бота разбудили,
+# выбрасывалось вместе с бэклогом: человек видел тишину, в логах ни следа.
+DROP_PENDING = os.getenv("WEBHOOK_DROP_PENDING") == "1"
+
+
 async def on_startup(bot: Bot) -> None:
     await db.pool()
-    if BASE:
-        await bot.set_webhook(BASE.rstrip("/") + PATH, drop_pending_updates=True,
-                              secret_token=SECRET)
-        logging.info("webhook: %s", BASE.rstrip("/") + PATH)
+    if not BASE:
+        # молча пропущенный вебхук выглядит как «бот не отвечает» без причины в логах
+        return logging.error("ни WEBHOOK_BASE, ни RENDER_EXTERNAL_URL не заданы, "
+                             "вебхук не настроен, апдейты приходить не будут")
+    await bot.set_webhook(BASE.rstrip("/") + PATH, drop_pending_updates=DROP_PENDING,
+                          secret_token=SECRET)
+    logging.info("webhook: %s", BASE.rstrip("/") + PATH)
 
 
 def main() -> None:

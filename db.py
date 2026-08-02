@@ -127,14 +127,30 @@ async def history(tg_id: int, limit: int = 12) -> list[dict]:
     return [dict(r) for r in reversed(rows)]
 
 
+MAX_FACTS = 40                    # весь список печатается в промпт на каждом запросе
+
+
 async def save_fact(tg_id: int, key: str, value: str) -> None:
-    """Факт из живой реплики. По ключу перезаписываем: человек мог передумать."""
+    """Факт из живой реплики.
+
+    Потолок нужен не для порядка, а из-за денег: факты уходят в промпт целиком,
+    а дедупликация идёт по паре ключ-значение, поэтому перефразировки копятся и
+    каждое следующее сообщение такого собеседника дорожает. Лишнее вытесняем по
+    старшинству, свежее сказанное человеком важнее давнего.
+    """
     p = await pool()
     async with p.acquire() as c:
         await c.execute(
             "INSERT INTO facts (tg_id, key, value) VALUES ($1, $2, $3) "
             "ON CONFLICT (tg_id, key, value) DO UPDATE SET created_at = now()",
             tg_id, key[:60], value[:300])
+        # подзапрос отдаёт NULL, пока фактов меньше потолка, и тогда сравнение
+        # ложно для всех строк, то есть не удаляется ничего
+        await c.execute(
+            "DELETE FROM facts WHERE tg_id = $1 AND created_at < ("
+            "  SELECT created_at FROM facts WHERE tg_id = $1"
+            "  ORDER BY created_at DESC OFFSET $2 LIMIT 1)",
+            tg_id, MAX_FACTS)
 
 
 async def save_why(tg_id: int, why: str) -> None:
