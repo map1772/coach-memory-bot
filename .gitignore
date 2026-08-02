@@ -1,3 +1,6 @@
 .env
 __pycache__/
 *.pyc
+_key.txt
+_run_env.sh
+ответ_олегу_черновик.md
