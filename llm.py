@@ -14,8 +14,8 @@ import re
 import httpx
 from pydantic import BaseModel, Field, ValidationError
 
-BASE_URL = os.getenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")
-MODEL = os.getenv("LLM_MODEL", "gemini-2.0-flash")
+BASE_URL = os.getenv("LLM_BASE_URL", "https://api.vsegpt.ru/v1")
+MODEL = os.getenv("LLM_MODEL", "google/gemini-2.5-flash")
 API_KEY = os.getenv("LLM_API_KEY", "")
 TIMEOUT = float(os.getenv("LLM_TIMEOUT", "45"))
 
@@ -53,7 +53,7 @@ def _extract_json(raw: str) -> dict:
         return json.JSONDecoder().raw_decode(raw[i:])[0]
 
 
-async def raw_call(messages: list[dict], temperature: float = 0.7, max_tokens: int = 900) -> str:
+async def raw_call(messages: list[dict], temperature: float = 0.7, max_tokens: int = 1600) -> str:
     headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
     payload = {"model": MODEL, "messages": messages,
                "temperature": temperature, "max_tokens": max_tokens,
