@@ -6,6 +6,11 @@
 # Когда демо отыграет, выключить: Actions -> keepalive -> Disable workflow.
 name: keepalive
 
+# Заданию нужен только исходящий curl, токен репозитория ему не нужен вовсе.
+# Права прописаны явно, чтобы будущий шаг не унаследовал дефолтные молча.
+permissions:
+  contents: read
+
 on:
   schedule:
     - cron: "*/5 * * * *"
