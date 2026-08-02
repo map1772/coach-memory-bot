@@ -118,7 +118,10 @@ async def demo(msg: Message):
     for prof in (a, b):
         await msg.bot.send_chat_action(msg.chat.id, "typing")
         r = await llm.ask(prompts.system_prompt(prof), [], question)
-        who = f"{prof['name']}, {prof['level']}, цель {prof['goal']}, {prof['freq']} раза в неделю"
+        # не «{freq} раза в неделю»: на пятёрке выходит «5 раза», и демонстрация,
+        # которая должна впечатлить, спотыкается на школьной ошибке
+        who = (f"{prof['name']}, {prof['level']}, цель {prof['goal']}, "
+               f"тренировок в неделю: {prof['freq']}")
         # без parse_mode: ответ модели может содержать звёздочки и подчёркивания,
         # и Telegram отвергнет всё сообщение из-за незакрытой разметки
         await msg.answer(f"{who}\n\n{r.text()}")
@@ -171,7 +174,9 @@ async def talk(msg: Message):
         await db.add_message(tg_id, "user", msg.text)
         await db.add_message(tg_id, "bot", reply.text())
         if reply.why:
-            used = ", ".join(reply.used_profile_fields)
+            # модель повторяет одно поле по разу на каждый факт, и в /why выходит
+            # «инвентарь, ограничение, инвентарь»: порядок бережём, повторы убираем
+            used = ", ".join(dict.fromkeys(reply.used_profile_fields))
             await db.save_why(tg_id, reply.why + (f"\n\nОпирался на поля: {used}" if used else ""))
         await msg.answer(reply.text()[:LIMIT])
 
