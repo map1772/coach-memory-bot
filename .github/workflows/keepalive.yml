@@ -13,12 +13,27 @@ permissions:
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "0 */4 * * *"
   workflow_dispatch:
+
+# новый запуск заменяет предыдущий, иначе после ручного старта в очереди копятся
+# многочасовые задания и лимит Actions выгорает впустую
+concurrency:
+  group: keepalive
+  cancel-in-progress: true
 
 jobs:
   ping:
     runs-on: ubuntu-latest
+    timeout-minutes: 350
     steps:
-      # -f роняет шаг на коде 5xx, иначе разбудить не смогли, а лог зелёный
-      - run: curl -fsS --max-time 120 https://coach-memory-bot.onrender.com/health
+      # 05.08.2026: расписание Actions на практике срабатывает раз в 2-2.5 часа вместо
+      # пяти минут, и сервис успевает уснуть. Поэтому пингуем изнутри одного запуска:
+      # 68 итераций по 5 минут покрывают почти шесть часов подряд.
+      # -f роняет curl на 5xx, но шаг не валим: одна неудача не повод бросать цикл
+      - run: |
+          for i in $(seq 1 68); do
+            curl -fsS --max-time 90 -o /dev/null https://coach-memory-bot.onrender.com/health \
+              || echo "пинг $i не прошёл"
+            sleep 300
+          done
